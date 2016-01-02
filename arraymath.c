@@ -84,7 +84,11 @@ void _PG_fini(void)
 
 #define BITMAP_ISNULL(bitmap, bitmask) (bitmap && (*bitmap & bitmask) == 0)
     
-
+#if PG_VERSION_NUM >= 90500
+#define _array_create_iterator(array) array_create_iterator(array, 0, NULL)
+#else
+#define _array_create_iterator(array) array_create_iterator(array, 0)
+#endif
 
 /**********************************************************************
 * Functions
@@ -192,11 +196,7 @@ arraymath_array_oper_elem(ArrayType *array1, const char *opname, Datum element2,
     /* Learn more about the input array */
     info1 = arraymath_typentry_from_type(element_type1);
 
-#if PG_VERSION_NUM >= 90500
-    iterator1 = array_create_iterator(array1, 0, NULL);
-#else
-    iterator1 = array_create_iterator(array1, 0);
-#endif
+    iterator1 = _array_create_iterator(array1);
 
     /* Allocate space for output data */
     elems = palloc(sizeof(Datum)*nelems);
@@ -217,6 +217,8 @@ arraymath_array_oper_elem(ArrayType *array1, const char *opname, Datum element2,
         }
         n++;
     }
+
+    array_free_iterator(iterator1);
 
     /* Build 1-d output array */
     tinfo = arraymath_typentry_from_type(rtype);
@@ -258,19 +260,17 @@ arraymath_array_oper_array(ArrayType *array1, const char *opname, ArrayType *arr
     int ndims2 = ARR_NDIM(array2);
     int *dims1 = ARR_DIMS(array1);
     int *dims2 = ARR_DIMS(array2);
-    char *ptr1, *ptr2;
     Oid element_type1 = ARR_ELEMTYPE(array1);
     Oid element_type2 = ARR_ELEMTYPE(array2);   
     Oid rtype; 
     int nitems1, nitems2;
     int nelems, n;
-    bits8 *bitmap1, *bitmap2;
-    int bitmask1, bitmask2;
     FmgrInfo operfmgrinfo;
     TypeCacheEntry *info1, *info2, *tinfo;
+    ArrayIterator iterator1, iterator2;
 
     /* Only 1D arrays for now */
-    if ( ndims1 != 1 || ndims2 != 1 )
+    if (ndims1 != 1 || ndims2 != 1)
     {
         elog(ERROR, "only 1-dimensional arrays supported");
         return NULL;
@@ -287,7 +287,7 @@ arraymath_array_oper_array(ArrayType *array1, const char *opname, ArrayType *arr
     nelems = Max(nitems1, nitems2);
 
     /* If either input is empty, return empty */
-    if ( nitems1 == 0 || nitems2 == 0 )
+    if (nitems1 == 0 || nitems2 == 0)
     {
         return construct_empty_array(rtype);
     }
@@ -299,57 +299,29 @@ arraymath_array_oper_array(ArrayType *array1, const char *opname, ArrayType *arr
     /* Learn more about the input arrays */
     info1 = arraymath_typentry_from_type(element_type1);
     info2 = arraymath_typentry_from_type(element_type2);
-    
+
+    iterator1 = _array_create_iterator(array1);
+    iterator2 = _array_create_iterator(array2);
+
     /* Loop over all the items, re-using items from the shorter */
     /* array to apply to the longer */
-    for( n = 0; n < nelems; n++ )
+    for(n = 0; n < nelems; n++)
     {
         Datum elt1, elt2;
-        int i1 = n % nitems1;
-        int i2 = n % nitems2;
         bool isnull1, isnull2;
-
-        /* Initialize array pointers at start of loop, and */
-        /* on wrap-around */
-        if ( i1 == 0 )
+        
+        if (!array_iterate(iterator1, &elt1, &isnull1))
         {
-            ptr1 = ARR_DATA_PTR(array1);
-            bitmap1 = ARR_NULLBITMAP(array1);
-            bitmask1 = 1;
+            array_free_iterator(iterator1);
+            iterator1 = _array_create_iterator(array1);
+            array_iterate(iterator1, &elt1, &isnull1);
         }
         
-        if ( i2 == 0 )
+        if (!array_iterate(iterator2, &elt2, &isnull2))
         {
-            ptr2 = ARR_DATA_PTR(array2);
-            bitmap2 = ARR_NULLBITMAP(array2);
-            bitmask2 = 1;
-        }
-        
-        /* Check null status */
-        isnull1 = BITMAP_ISNULL(bitmap1, bitmask1);
-        isnull2 = BITMAP_ISNULL(bitmap2, bitmask2);
-        
-        /* Start with NULL values */
-        elt1 = elt2 = (Datum) 0;
-        
-        if ( ! isnull1 )
-        {
-            /* Read the element value */
-            elt1 = fetch_att(ptr1, info1->typbyval, info1->typlen);
-
-            /* Move the pointer forward */
-            ptr1 = att_addlength_pointer(ptr1, info1->typlen, ptr1);
-            ptr1 = (char *) att_align_nominal(ptr1, info1->typalign);
-        }
-
-        if ( ! isnull2 )
-        {
-            /* Read the element value */
-            elt2 = fetch_att(ptr2, info2->typbyval, info2->typlen);
-
-            /* Move the pointer forward */
-            ptr2 = att_addlength_pointer(ptr2, info2->typlen, ptr2);
-            ptr2 = (char *) att_align_nominal(ptr2, info2->typalign);
+            array_free_iterator(iterator2);
+            iterator2 = _array_create_iterator(array2);
+            array_iterate(iterator2, &elt2, &isnull2);
         }
 
         /* NULL on either side of operator yields output NULL */
@@ -363,11 +335,11 @@ arraymath_array_oper_array(ArrayType *array1, const char *opname, ArrayType *arr
             nulls[n] = false;
             elems[n] = FunctionCall2(&operfmgrinfo, elt1, elt2);
         }
-        
-        BITMAP_INCREMENT(bitmap1, bitmask1);
-        BITMAP_INCREMENT(bitmap2, bitmask2);
     }
 
+    array_free_iterator(iterator1);
+    array_free_iterator(iterator2);
+    
     /* Build 1-d output array */
     dims[0] = nelems;
     lbs[0] = 1;

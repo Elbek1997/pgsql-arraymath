@@ -70,3 +70,9 @@ ERROR:  multidimensional arrays must have array expressions with matching dimens
 SELECT ARRAY[]::integer[] @< ARRAY[NULL]::integer[];
 ERROR:  only 1-dimensional arrays supported
 CONTEXT:  SQL function "array_lt_array" statement 1
+SELECT ARRAY[1,2,3,4,5,6,7,8,9,10,11,12,13,14] @* ARRAY[1,2];
+               ?column?               
+--------------------------------------
+ {1,4,3,8,5,12,7,16,9,20,11,24,13,28}
+(1 row)
+
