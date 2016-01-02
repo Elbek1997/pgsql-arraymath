@@ -83,11 +83,11 @@ void _PG_fini(void)
     } } } while(0);
 
 #define BITMAP_ISNULL(bitmap, bitmask) (bitmap && (*bitmap & bitmask) == 0)
-    
+
 #if PG_VERSION_NUM >= 90500
-#define _array_create_iterator(array) array_create_iterator(array, 0, NULL)
+#define ARR_CREATE_ITERATOR(array) array_create_iterator(array, 0, NULL)
 #else
-#define _array_create_iterator(array) array_create_iterator(array, 0)
+#define ARR_CREATE_ITERATOR(array) array_create_iterator(array, 0)
 #endif
 
 /**********************************************************************
@@ -111,7 +111,7 @@ arraymath_fmgrinfo_from_optype(const char *opstr, Oid element_type1,
     /* Look up the operator Oid that corresponts to this combination */
     /* of symbol and data types */
     operator_oid = OpernameGetOprid(list_make1(makeString(pstrdup(opstr))), element_type1, element_type2);
-    if ( ! (operator_oid && OperatorIsVisible(operator_oid)) )
+    if (!(operator_oid && OperatorIsVisible(operator_oid)))
     {
         elog(ERROR, "operator does not exist");
     }
@@ -157,8 +157,8 @@ static ArrayType *
 arraymath_array_oper_elem(ArrayType *array1, const char *opname, Datum element2, Oid element_type2)
 {
     ArrayType *array_out;
-    int    dims[1];
-    int    lbs[1];
+    int dims[1];
+    int lbs[1];
     Datum *elems;
     bool *nulls;
     
@@ -196,7 +196,7 @@ arraymath_array_oper_elem(ArrayType *array1, const char *opname, Datum element2,
     /* Learn more about the input array */
     info1 = arraymath_typentry_from_type(element_type1);
 
-    iterator1 = _array_create_iterator(array1);
+    iterator1 = ARR_CREATE_ITERATOR(array1);
 
     /* Allocate space for output data */
     elems = palloc(sizeof(Datum)*nelems);
@@ -251,8 +251,8 @@ static ArrayType *
 arraymath_array_oper_array(ArrayType *array1, const char *opname, ArrayType *array2)
 {
     ArrayType *array_out;
-    int    dims[1];
-    int    lbs[1];
+    int dims[1];
+    int lbs[1];
     Datum *elems;
     bool *nulls;
     
@@ -300,32 +300,35 @@ arraymath_array_oper_array(ArrayType *array1, const char *opname, ArrayType *arr
     info1 = arraymath_typentry_from_type(element_type1);
     info2 = arraymath_typentry_from_type(element_type2);
 
-    iterator1 = _array_create_iterator(array1);
-    iterator2 = _array_create_iterator(array2);
+    /* Prepare to iterate */
+    iterator1 = ARR_CREATE_ITERATOR(array1);
+    iterator2 = ARR_CREATE_ITERATOR(array2);
 
     /* Loop over all the items, re-using items from the shorter */
     /* array to apply to the longer */
-    for(n = 0; n < nelems; n++)
+    for (n = 0; n < nelems; n++)
     {
         Datum elt1, elt2;
         bool isnull1, isnull2;
         
+        /* Reset to beginning so we loop through smaller arrays over and over */
         if (!array_iterate(iterator1, &elt1, &isnull1))
         {
             array_free_iterator(iterator1);
-            iterator1 = _array_create_iterator(array1);
+            iterator1 = ARR_CREATE_ITERATOR(array1);
             array_iterate(iterator1, &elt1, &isnull1);
         }
         
+        /* Reset to beginning so we loop through smaller arrays over and over */
         if (!array_iterate(iterator2, &elt2, &isnull2))
         {
             array_free_iterator(iterator2);
-            iterator2 = _array_create_iterator(array2);
+            iterator2 = ARR_CREATE_ITERATOR(array2);
             array_iterate(iterator2, &elt2, &isnull2);
         }
 
         /* NULL on either side of operator yields output NULL */
-        if ( isnull1 || isnull2 )
+        if (isnull1 || isnull2)
         {
             nulls[n] = true;
             elems[n] = (Datum) 0;
@@ -336,7 +339,8 @@ arraymath_array_oper_array(ArrayType *array1, const char *opname, ArrayType *arr
             elems[n] = FunctionCall2(&operfmgrinfo, elt1, elt2);
         }
     }
-
+    
+    /* Clean up */
     array_free_iterator(iterator1);
     array_free_iterator(iterator2);
     
@@ -350,7 +354,7 @@ arraymath_array_oper_array(ArrayType *array1, const char *opname, ArrayType *arr
     pfree(nulls);
     
     /* Make sure we haven't been given garbage */
-    if ( ! array_out )
+    if (!array_out)
     {
         elog(ERROR, "unable to construct output array");
         return NULL;
